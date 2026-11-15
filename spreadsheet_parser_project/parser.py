@@ -26,15 +26,17 @@ job_config = bigquery.LoadJobConfig(schema_update_options=[
     bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION]
     )
 
+def bad_lines(file_line):
+    print(f"Bad line found: {file_line}")
+
 def upload(folder):
-    print(folder.items())
     for item_parent, item in folder.items():
         for folder_name, file in item:
             folder_name = folder_name.replace("/", "-")
             table_name = table+"."+folder_name
             for col in file.select_dtypes(include=["object"], exclude=["str"]).columns:
                 # Check the actual types inside the object column (ignoring empty NaN cells)
-                inferred = pd.api.types.infer_dtype(file[col], skipna=True)
+                inferred = pd.api.types.infer_dtype(file[col], skipna=True) #
                 
                 # Only convert if the column has mixed types (e.g., strings + ints)
                 if "mixed" in inferred:
@@ -52,7 +54,7 @@ def read_data(bucket_name, blob_name):
                 if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
                     folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_excel(file.open("rb"), comment="#")))
                 elif (file.name.endswith(".csv")):
-                    folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_csv(file.open("rb"), comment="#", sep=None, engine="python")))
+                    folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_csv(file.open("rb"), comment="#", sep=None, engine="python", on_bad_lines=bad_lines)))
             upload(folder)
 
 
