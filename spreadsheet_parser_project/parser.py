@@ -32,6 +32,13 @@ def upload(folder):
         for folder_name, file in item:
             folder_name = folder_name.replace("/", "-")
             table_name = table+"."+folder_name
+            for col in file.select_dtypes(include=["object"], exclude=["str"]).columns:
+                # Check the actual types inside the object column (ignoring empty NaN cells)
+                inferred = pd.api.types.infer_dtype(file[col], skipna=True)
+                
+                # Only convert if the column has mixed types (e.g., strings + ints)
+                if "mixed" in inferred:
+                    file[col] = file[col].astype("string")
             bq.load_table_from_dataframe(file, table_name, job_config=job_config).result()
 
 def read_data(bucket_name, blob_name):
