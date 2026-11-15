@@ -1,3 +1,5 @@
+#These are my goals with this project:
+#
 #Parses multiple files without any error
 #Creates and validates schema and omits empty columns
 #Hashes PII
