@@ -62,7 +62,6 @@ def read_data(bucket_name, blob_name):
     for file in blobby:
         if (not file.name.endswith("/") and not file.name.endswith(".DS_Store") and not file.name.endswith("audit_ground_truth.csv")):
             folder = defaultdict(list) #Kind of like a hashmap, i mean it's built on a hashmap so it's O(1) efficiency.
-            format = ""
             try:
                 with file.open('r') as f:
                     if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
