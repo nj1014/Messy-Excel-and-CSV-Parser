@@ -5,11 +5,12 @@
 #Hashes PII
 #Accessible by AI (which has safety checks and serve a specific role) using the RAG architecture
 
+#RIGHT NOW ACCORDING TO GCP AGENT ABOUT 68.33% of records are fully compliant without requiring manual cleaning or fallback imputation FOR ONE FILE
 import pandas as pd
-import os
-import json
 import hashlib
 import re
+import csv
+from functools import partial
 from collections import defaultdict
 from pathlib import Path
 from google.cloud import bigquery
@@ -35,8 +36,9 @@ def sanitize_lines(file):
     file.columns = [("_" + col) if col and col[0].isdigit() else col for col in file.columns]
     return file
 
-def bad_lines(file_line):
+def bad_lines(file_line, filepath):
     print(f"Bad line found: {file_line}")
+    print(f"File: {filepath}")
     file_line = [re.sub(r'[^a-zA-Z0-9_]', '_', str(line)).strip() for line in file_line]
     print(f"Sanitized line: {file_line}")
     return file_line
@@ -67,7 +69,7 @@ def read_data(bucket_name, blob_name):
                     if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
                         folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_excel(file.open("rb"))))
                     elif (file.name.endswith(".csv")):
-                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_csv(file.open("r"), comment="#", sep=None, engine="python", on_bad_lines=bad_lines)))
+                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_csv(file.open("r"), comment="#", sep=None, engine="python", on_bad_lines=partial(bad_lines, filepath=str(Path(file.name)))))) #used partial to locate error file
                 upload(folder)
             except Exception as e:
                 print(f"Error processing file {file.name}: {e}")
