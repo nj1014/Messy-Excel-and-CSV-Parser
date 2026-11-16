@@ -9,6 +9,7 @@ import pandas as pd
 import os
 import json
 import hashlib
+import re
 from collections import defaultdict
 from pathlib import Path
 from google.cloud import bigquery
@@ -26,14 +27,26 @@ job_config = bigquery.LoadJobConfig(schema_update_options=[
     bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION]
     )
 
+def sanitize_lines(file):
+    # This function will sanitize the lines in the file to ensure they are valid JSON.
+    sanitized_lines = []
+    file.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).strip() for col in file.columns]
+    file.columns = [re.sub(r'_+', '_', col).strip('_') for col in file.columns]
+    file.columns = [("_" + col) if col and col[0].isdigit() else col for col in file.columns]
+    return file
+
 def bad_lines(file_line):
     print(f"Bad line found: {file_line}")
+    file_line = [re.sub(r'[^a-zA-Z0-9_]', '_', str(line)).strip() for line in file_line]
+    print(f"Sanitized line: {file_line}")
+    return file_line
 
 def upload(folder):
     for item_parent, item in folder.items():
         for folder_name, file in item:
             folder_name = folder_name.replace("/", "-")
             table_name = table+"."+folder_name
+            file = sanitize_lines(file)
             for col in file.select_dtypes(include=["object"], exclude=["str"]).columns:
                 # Check the actual types inside the object column (ignoring empty NaN cells)
                 inferred = pd.api.types.infer_dtype(file[col], skipna=True) #
@@ -50,12 +63,15 @@ def read_data(bucket_name, blob_name):
         if (not file.name.endswith("/") and not file.name.endswith(".DS_Store") and not file.name.endswith("audit_ground_truth.csv")):
             folder = defaultdict(list) #Kind of like a hashmap, i mean it's built on a hashmap so it's O(1) efficiency.
             format = ""
-            with file.open('r') as f:
-                if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
-                    folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_excel(file.open("rb"), comment="#")))
-                elif (file.name.endswith(".csv")):
-                    folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_csv(file.open("rb"), comment="#", sep=None, engine="python", on_bad_lines=bad_lines)))
-            upload(folder)
+            try:
+                with file.open('r') as f:
+                    if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
+                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_excel(file.open("rb"))))
+                    elif (file.name.endswith(".csv")):
+                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_csv(file.open("r"), comment="#", sep=None, engine="python", on_bad_lines=bad_lines)))
+                upload(folder)
+            except Exception as e:
+                print(f"Error processing file {file.name}: {e}")
 
 
 stringgg = """@functions_framework.cloud_event
