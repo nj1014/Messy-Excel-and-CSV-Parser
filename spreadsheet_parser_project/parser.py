@@ -7,7 +7,7 @@
 
 #RIGHT NOW ACCORDING TO GCP AGENT ABOUT 68.33% of records are fully compliant without requiring manual cleaning or fallback imputation FOR ONE FILE
 from email import header
-
+import io
 import pandas as pd
 import hashlib
 import re
@@ -39,15 +39,16 @@ def sanitize_lines(file):
     return file
 
 def find_data_excel(file):
-    xcel_file = pd.ExcelFile(file)
-    sheett = 0
-    for sheet in xcel_file.sheet_names:
-        if "summary" in sheet.lower() or "cover" in sheet.lower():
-            sheett+=1
-            continue
-        x = xcel_file.parse(sheet, nrows=5)
-        if x.shape[0] > 3 and x.shape[1] > 1:
-            return pd.read_excel(file.open("rb"), sheet_name=sheett, encoding="utf-8")
+    with io.BytesIO(file.download_as_bytes()) as excel_bytes: #Safe as each excel file is about 8 KB. This line of code goes throguh each line individually.
+        xcel_file = pd.ExcelFile(excel_bytes)
+        sheett = 0
+        for sheet in xcel_file.sheet_names:
+            if "summary" in sheet.lower() or "cover" in sheet.lower():
+                sheett+=1
+                continue
+            x = pd.read_excel(xcel_file, sheet_name=sheett)
+            if x.shape[0] > 3 and x.shape[1] > 1:
+                return pd.read_excel(xcel_file, sheet_name=sheett)
 
 def find_delimiter(file):
     with file.open('r', encoding="utf-8") as f:
@@ -86,11 +87,10 @@ def read_data(bucket_name, blob_name):
         if (not file.name.endswith("/") and not file.name.endswith(".DS_Store") and not file.name.endswith("audit_ground_truth.csv")):
             folder = defaultdict(list) #Kind of like a hashmap, i mean it's built on a hashmap so it's O(1) efficiency.
             try:
-                with file.open('r') as f:
-                    if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
-                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_excel(file.open("rb"))))
-                    elif (file.name.endswith(".csv")):
-                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, find_delimiter(file)))
+                if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
+                    folder[str(Path(file.name).parent)].append((Path(file.name).stem, find_data_excel(file)))
+                elif (file.name.endswith(".csv")):
+                    folder[str(Path(file.name).parent)].append((Path(file.name).stem, find_delimiter(file)))
                 upload(folder)
             except Exception as e:
                 print(f"Error processing file {file.name}: {e}")
