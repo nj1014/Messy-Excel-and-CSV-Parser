@@ -6,6 +6,8 @@
 #Accessible by AI (which has safety checks and serve a specific role) using the RAG architecture
 
 #RIGHT NOW ACCORDING TO GCP AGENT ABOUT 68.33% of records are fully compliant without requiring manual cleaning or fallback imputation FOR ONE FILE
+from email import header
+
 import pandas as pd
 import hashlib
 import re
@@ -21,7 +23,7 @@ parsed_data = "/parsed_Data/"
 bq = bigquery.Client()
 pantry = storage.Client()
 messy_data = "/spreadsheets/"
-table = "rugged-coil-514202-s2.messydatatesting123"
+table = "rugged-coil-514202-s2.messy_data_parsing_project"
 
 job_config = bigquery.LoadJobConfig(schema_update_options=[
     bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
@@ -30,18 +32,26 @@ job_config = bigquery.LoadJobConfig(schema_update_options=[
 
 def sanitize_lines(file):
     # This function will sanitize the lines in the file to ensure they are valid JSON.
-    sanitized_lines = []
+    file.columns = [col.strip() for col in file.columns]
     file.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).strip() for col in file.columns]
     file.columns = [re.sub(r'_+', '_', col).strip('_') for col in file.columns]
     file.columns = [("_" + col) if col and col[0].isdigit() else col for col in file.columns]
     return file
 
-def bad_lines(file_line, filepath):
-    print(f"Bad line found: {file_line}")
-    print(f"File: {filepath}")
-    file_line = [re.sub(r'[^a-zA-Z0-9_]', '_', str(line)).strip() for line in file_line]
-    print(f"Sanitized line: {file_line}")
-    return file_line
+def find_delimiter(file):
+    with file.open('r', encoding="utf-8") as f:
+        skip = 0
+        for line in f:
+            line = line.strip()
+            if line.startswith("#"):
+                skip+=1
+                continue  # Skip comment lines
+            else:
+                sep = max((",", ";", ":", "|"), key=line.count)
+                if line.count(sep) == 0:
+                    raise ValueError(f"None of the separators are found in the line: {line}")
+                return pd.read_csv(file.open("r"), sep=sep, skiprows=skip, encoding="utf-8")
+                
 
 def upload(folder):
     for item_parent, item in folder.items():
@@ -69,7 +79,7 @@ def read_data(bucket_name, blob_name):
                     if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
                         folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_excel(file.open("rb"))))
                     elif (file.name.endswith(".csv")):
-                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_csv(file.open("r"), comment="#", sep=None, engine="python", on_bad_lines=partial(bad_lines, filepath=str(Path(file.name)))))) #used partial to locate error file
+                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, find_delimiter(file))) #used partial to locate error file
                 upload(folder)
             except Exception as e:
                 print(f"Error processing file {file.name}: {e}")
