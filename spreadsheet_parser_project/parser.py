@@ -12,6 +12,8 @@ import pandas as pd
 import hashlib
 import re
 import csv
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from pydantic import BaseModel, Field
 from functools import partial
 from collections import defaultdict
 from pathlib import Path
@@ -19,6 +21,7 @@ from google.cloud import bigquery
 from google.cloud import storage
 import functions_framework
 
+api = FastAPI()
 parsed_data = "/parsed_Data/"
 bq = bigquery.Client()
 pantry = storage.Client()
@@ -30,8 +33,18 @@ job_config = bigquery.LoadJobConfig(schema_update_options=[
     bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION]
     )
 
+
+class SchemaValidation(BaseModel):
+    #timestamp: TIMESTAMP
+    currency: float
+    id: str
+    transaction_id : str
+
+
+
 def sanitize_lines(file):
     # This function will sanitize the lines in the file to ensure they are valid JSON.
+    file.columns = [str(col).lower() for col in file.columns]
     file.columns = [col.strip() for col in file.columns]
     file.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).strip() for col in file.columns]
     file.columns = [re.sub(r'_+', '_', col).strip('_') for col in file.columns]
@@ -46,9 +59,11 @@ def find_data_excel(file):
             if "summary" in sheet.lower() or "cover" in sheet.lower():
                 sheett+=1
                 continue
-            x = pd.read_excel(xcel_file, sheet_name=sheett)
-            if x.shape[0] > 3 and x.shape[1] > 1:
-                return pd.read_excel(xcel_file, sheet_name=sheett)
+            x = pd.read_excel(xcel_file, sheet_name=sheett, header=None)
+            if x.shape[0] > 3 and x.shape[1] > 2:
+                index = x[0].first_valid_index()
+                print(file.name)
+                return pd.read_excel(xcel_file, sheet_name=sheett, skiprows=index)
 
 def find_delimiter(file):
     with file.open('r', encoding="utf-8") as f:
