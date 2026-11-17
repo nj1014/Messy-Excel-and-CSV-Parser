@@ -38,6 +38,17 @@ def sanitize_lines(file):
     file.columns = [("_" + col) if col and col[0].isdigit() else col for col in file.columns]
     return file
 
+def find_data_excel(file):
+    xcel_file = pd.ExcelFile(file)
+    sheett = 0
+    for sheet in xcel_file.sheet_names:
+        if "summary" in sheet.lower() or "cover" in sheet.lower():
+            sheett+=1
+            continue
+        x = xcel_file.parse(sheet, nrows=5)
+        if x.shape[0] > 3 and x.shape[1] > 1:
+            return pd.read_excel(file.open("rb"), sheet_name=sheett, encoding="utf-8")
+
 def find_delimiter(file):
     with file.open('r', encoding="utf-8") as f:
         skip = 0
@@ -79,7 +90,7 @@ def read_data(bucket_name, blob_name):
                     if (file.name.endswith(".xlsx") or file.name.endswith(".xls")):
                         folder[str(Path(file.name).parent)].append((Path(file.name).stem, pd.read_excel(file.open("rb"))))
                     elif (file.name.endswith(".csv")):
-                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, find_delimiter(file))) #used partial to locate error file
+                        folder[str(Path(file.name).parent)].append((Path(file.name).stem, find_delimiter(file)))
                 upload(folder)
             except Exception as e:
                 print(f"Error processing file {file.name}: {e}")
