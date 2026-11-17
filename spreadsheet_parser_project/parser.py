@@ -62,7 +62,6 @@ def find_data_excel(file):
             x = pd.read_excel(xcel_file, sheet_name=sheett, header=None)
             if x.shape[0] > 3 and x.shape[1] > 2:
                 index = x[0].first_valid_index()
-                print(file.name)
                 return pd.read_excel(xcel_file, sheet_name=sheett, skiprows=index)
 
 def find_delimiter(file):
