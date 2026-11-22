@@ -12,8 +12,9 @@ import pandas as pd
 import hashlib
 import re
 import csv
+from datetime import date, datetime, timezone
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator, TypeAdapter, ValidationError, model_validator
 from functools import partial
 from collections import defaultdict
 from pathlib import Path
@@ -27,6 +28,7 @@ bq = bigquery.Client()
 pantry = storage.Client()
 messy_data = "/spreadsheets/"
 table = "rugged-coil-514202-s2.messy_data_parsing_project"
+quarantine = []
 
 job_config = bigquery.LoadJobConfig(schema_update_options=[
     bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
@@ -34,15 +36,60 @@ job_config = bigquery.LoadJobConfig(schema_update_options=[
     )
 
 
-class SchemaValidation(BaseModel):
-    #timestamp: TIMESTAMP
-    currency: float
-    id: str
-    transaction_id : str
+class SchemaValidator(BaseModel):  
+    @model_validator(mode='before')
+    @classmethod
+    def schema_matching():
+        for schemName in SchemaValidator.model_fields.keys():
 
+    DATE: datetime
+    @field_validator('date', mode='before')
+    @classmethod
+    def convert_to_timestamp(cls, value):
+        # 1. If already a timestamp, pass it through
+        try:
+            if isinstance(value, datetime):
+                return pd.to_datetime(value, utc=True, origin="unix")
 
+            #2. If the value is an integer epoch
+            if isinstance(value, int):
+                return pd.to_datetime(value, utc=True, origin="unix")
 
-def sanitize_lines(file):
+            #3. If it's an ISO date/datetime string, parse it
+            if isinstance(value, str) and pd.notna(pd.to_datetime(value, format="ISO8601", errors="coerce")): #This statement uses notna to generate a false or true statement
+                return pd.to_datetime(value, utc=True)
+
+            return pd.to_datetime(value, utc=True, format="mixed")
+        except:
+            print()
+    TRANSACTION: str
+    ID: str
+    STATUS : str
+    SKU : str | None
+    PRICE : float
+    TOTAL : float
+    STATUS : str | None
+    REGION: str | None
+    UNITS: int
+    DEPARTMENT : str | None
+
+def schema_validation(file):
+    file = file.where(pd.notnull(file), None)
+    records = file.to_dict(orient="records")
+
+    valid_row = []
+
+    for row_index, row in enumerate(records, start=1):
+        try: 
+            validated_data = SchemaValidator.model_validate(row)
+            valid_row.append(validated_data)
+        except ValidationError as error:
+            print("Schema validation failed, moving line into quarantine")
+            quarantine.append(row)
+            print(error.errors(include_url=False))
+    return pd.DataFrame([row.model_dump() for row in valid_row])
+
+def sanitize_columns(file):
     # This function will sanitize the lines in the file to ensure they are valid JSON.
     file.columns = [str(col).lower() for col in file.columns]
     file.columns = [col.strip() for col in file.columns]
@@ -62,7 +109,9 @@ def find_data_excel(file):
             x = pd.read_excel(xcel_file, sheet_name=sheett, header=None)
             if x.shape[0] > 3 and x.shape[1] > 2:
                 index = x[0].first_valid_index()
-                return pd.read_excel(xcel_file, sheet_name=sheett, skiprows=index)
+                c = pd.read_excel(xcel_file, sheet_name=sheett, skiprows=index)
+                c = c.where(pd.notnull(c), None)
+                return schema_validation(c)
 
 def find_delimiter(file):
     with file.open('r', encoding="utf-8") as f:
@@ -76,7 +125,9 @@ def find_delimiter(file):
                 sep = max((",", ";", ":", "|"), key=line.count)
                 if line.count(sep) == 0:
                     raise ValueError(f"None of the separators are found in the line: {line}")
-                return pd.read_csv(file.open("r"), sep=sep, skiprows=skip, encoding="utf-8")
+                c = pd.read_csv(file.open("r"), sep=sep, skiprows=skip, encoding="utf-8")
+                c = c.where(pd.notnull(c), None)
+                return schema_validation(c)
                 
 
 def upload(folder):
@@ -84,7 +135,7 @@ def upload(folder):
         for folder_name, file in item:
             folder_name = folder_name.replace("/", "-")
             table_name = table+"."+folder_name
-            file = sanitize_lines(file)
+            file = sanitize_columns(file)
             for col in file.select_dtypes(include=["object"], exclude=["str"]).columns:
                 # Check the actual types inside the object column (ignoring empty NaN cells)
                 inferred = pd.api.types.infer_dtype(file[col], skipna=True) #
