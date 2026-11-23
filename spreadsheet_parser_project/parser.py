@@ -27,7 +27,7 @@ parsed_data = "/parsed_Data/"
 bq = bigquery.Client()
 pantry = storage.Client()
 messy_data = "/spreadsheets/"
-table = "rugged-coil-514202-s2.messy_data_parsing_project"
+table = "rugged-coil-514202-s2.pydantic_parsing_test"
 quarantine = []
 
 job_config = bigquery.LoadJobConfig(schema_update_options=[
@@ -35,58 +35,71 @@ job_config = bigquery.LoadJobConfig(schema_update_options=[
     bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION]
     )
 
+key_words = {
+        "Date" : "date|time|created",
+        "Transaction_ID" : "order|txn|transaction",
+        "Customer_ID" : "account|acct|customer",
+        "Status" : "status",
+        "Product_SKU" : "sku|product",
+        "Unit_Price_USD" : "price|cost",
+        "Total_Amount_USD" : "total|amount",
+        "Region" : "region",
+        "Units" : "units|quantity|qty",
+        "Department" : "department"
+    }
 
 class SchemaValidator(BaseModel):  
-    @model_validator(mode='before')
-    @classmethod
-    def schema_matching():
-        for schemName in SchemaValidator.model_fields.keys():
+    Date : str
+    Transaction_ID : str
+    Customer_ID : str
+    Status : str | None = None
+    Product_SKU : str | None = None
+    Unit_Price_USD : float | None = None #Should be required, but I'm testing my Pydantic model.
+    Total_Amount_USD : float #Should be required, but I'm testing my Pydantic model.
+    Region: str | None = None
+    Units: int
+    Department : str | None = None
 
-    DATE: datetime
-    @field_validator('date', mode='before')
-    @classmethod
-    def convert_to_timestamp(cls, value):
-        # 1. If already a timestamp, pass it through
-        try:
-            if isinstance(value, datetime):
-                return pd.to_datetime(value, utc=True, origin="unix")
 
-            #2. If the value is an integer epoch
-            if isinstance(value, int):
-                return pd.to_datetime(value, utc=True, origin="unix")
 
-            #3. If it's an ISO date/datetime string, parse it
-            if isinstance(value, str) and pd.notna(pd.to_datetime(value, format="ISO8601", errors="coerce")): #This statement uses notna to generate a false or true statement
-                return pd.to_datetime(value, utc=True)
 
-            return pd.to_datetime(value, utc=True, format="mixed")
-        except:
-            print()
-    TRANSACTION: str
-    ID: str
-    STATUS : str
-    SKU : str | None
-    PRICE : float
-    TOTAL : float
-    STATUS : str | None
-    REGION: str | None
-    UNITS: int
-    DEPARTMENT : str | None
+def schema_matching(data):
+        for schemName, value in key_words.items():
+            col = data.columns[data.columns.str.contains(value, case=False, na=False)] #matches colums using false/true as the index
+            
+            if not col.empty:
+                data = data.rename(columns={col[0]: schemName})
+
+        if data.shape[1] < 10:
+            missing_columns = key_words.keys() - set(data.columns)
+            for column in missing_columns:
+                data[column] = None
+                if "Total_Amount_USD" in column and not "Unit_Price_USD" in missing_columns:
+                    data["Unit_Price_USD"] = (data["Unit_Price_USD"].astype(str).str.replace(r"[^0-9.]", "", regex=True))
+                    data["Unit_Price_USD"] = pd.to_numeric(data["Unit_Price_USD"], errors="coerce") #Converts the string back into a number.
+                    data["Units"] = (data["Units"].astype(str).str.replace(r"[^0-9.]", "", regex=True))
+                    data["Units"] = pd.to_numeric(data["Units"], errors="coerce")
+                    data["Total_Amount_USD"] = data["Unit_Price_USD"] * data["Units"]
+                elif "Unit_Price_USD" in column and not "Total_Amount_USD" in missing_columns:
+                    data["Unit_Price_USD"] = data["Total_Amount_USD"] / data["Units"]
+                        
+        return data
+
 
 def schema_validation(file):
     file = file.where(pd.notnull(file), None)
-    records = file.to_dict(orient="records")
-
+    file = file.to_dict(orient="records")
     valid_row = []
 
-    for row_index, row in enumerate(records, start=1):
+    for row_index, row in enumerate(file, start=1): #Using itertuples after i get this working
         try: 
             validated_data = SchemaValidator.model_validate(row)
             valid_row.append(validated_data)
         except ValidationError as error:
-            print("Schema validation failed, moving line into quarantine")
+            print(f"Schema validation failed, moving line at {row_index} into quarantine")
             quarantine.append(row)
-            print(error.errors(include_url=False))
+    if not valid_row:
+        return pd.DataFrame()
     return pd.DataFrame([row.model_dump() for row in valid_row])
 
 def sanitize_columns(file):
@@ -110,8 +123,9 @@ def find_data_excel(file):
             if x.shape[0] > 3 and x.shape[1] > 2:
                 index = x[0].first_valid_index()
                 c = pd.read_excel(xcel_file, sheet_name=sheett, skiprows=index)
-                c = c.where(pd.notnull(c), None)
-                return schema_validation(c)
+                return schema_validation(schema_matching(sanitize_columns(c)))
+    return pd.DataFrame()
+
 
 def find_delimiter(file):
     with file.open('r', encoding="utf-8") as f:
@@ -126,8 +140,7 @@ def find_delimiter(file):
                 if line.count(sep) == 0:
                     raise ValueError(f"None of the separators are found in the line: {line}")
                 c = pd.read_csv(file.open("r"), sep=sep, skiprows=skip, encoding="utf-8")
-                c = c.where(pd.notnull(c), None)
-                return schema_validation(c)
+                return schema_validation(schema_matching(sanitize_columns(c)))
                 
 
 def upload(folder):
@@ -135,7 +148,6 @@ def upload(folder):
         for folder_name, file in item:
             folder_name = folder_name.replace("/", "-")
             table_name = table+"."+folder_name
-            file = sanitize_columns(file)
             for col in file.select_dtypes(include=["object"], exclude=["str"]).columns:
                 # Check the actual types inside the object column (ignoring empty NaN cells)
                 inferred = pd.api.types.infer_dtype(file[col], skipna=True) #
@@ -166,5 +178,21 @@ def new_file(cloud_event):
     data = cloud_event.data
     read_data(data["bucket"], data["name"])
 """
+
+datetime_function = """    @field_validator('Date', mode='before')
+    @classmethod
+    def convert_to_timestamp(cls, value):
+            # 1. If already a timestamp, pass it through
+            if value is None:
+                return value
+            try:
+                if isinstance(value, datetime):
+                    return pd.to_datetime(value, utc=True)
+                if isinstance(value, (int, float)):
+                    return pd.to_datetime(value, utc=True, origin="unix", unit="s")
+                return pd.to_datetime(value, utc=True, format="mixed")
+            except Exception:
+                return value  # Let Pydantic catch invalid dates and send to quarantine"""
+
 
 read_data("parserbucket103982", "google_fde_messy_client_migration")
